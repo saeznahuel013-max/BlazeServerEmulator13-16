@@ -1,43 +1,41 @@
-const express = require('express');
-const app = express();
-// Railway nos da un puerto, pero internamente usamos el 80 si es posible
-const port = process.env.PORT || 80;
+const net = require('net');
+const http = require('http');
 
-app.use((req, res, next) => {
+// Puerto interno que Railway mapea al TCP Proxy (usualmente 80 u 8080)
+const PORT = process.env.PORT || 80;
+
+// 1. SERVIDOR HTTP (Para el Redireccionador y Check de Conexión)
+const httpServer = http.createServer((req, res) => {
     const host = req.headers.host || '';
-    
-    // Si la petición va a Sony, logueamos pero no bloqueamos
-    if (host.includes('playstation') || host.includes('sony') || host.includes('scea')) {
-        console.log(`[PASARELA PSN] Redirigiendo tráfico de Sony: ${host}`);
-        // Respondemos 200 OK para que la PS3 crea que la conexión es exitosa
-        return res.status(200).send('OK');
+
+    // Bypass para PSN y Connectivity Check
+    if (host.includes('playstation') || req.url.includes('generate_204')) {
+        res.writeHead(200);
+        res.end('OK');
+        return;
     }
-    
-    console.log(`[FIFA] Petición detectada: ${req.method} ${req.url}`);
-    next();
+
+    // Redireccionador Blaze para FIFA
+    if (req.url.includes('/redirector/getServer')) {
+        console.log(`[FIFA] Redirigiendo consola...`);
+        res.writeHead(200, { 'Content-Type': 'text/xml' });
+        res.end(`<?xml version="1.0" encoding="UTF-8"?><server><hostname>${host}</hostname><port>80</port><use-ssl>false</use-ssl></server>`);
+        return;
+    }
+
+    res.writeHead(200);
+    res.end('AVAILABLE=1\nMAINTENANCE=0');
 });
 
-// Simulador de conexión para la PS3
-app.get(['/generate_204', '/connectivity-check.html', '/ncs'], (req, res) => {
-    res.status(204).send();
+// 2. LÓGICA DE PROXY TCP (Para los paquetes del juego)
+// Esto evita que los paquetes de PSN se traben
+httpServer.on('connection', (socket) => {
+    socket.on('error', (err) => {
+        if (err.code !== 'ECONNRESET') console.error('[TCP Error]', err.message);
+    });
 });
 
-// Redireccionador Blaze (FIFA 15)
-app.get('/redirector/getServer', (req, res) => {
-    res.set('Content-Type', 'text/xml');
-    res.send(`<?xml version="1.0" encoding="UTF-8"?><server><hostname>${req.headers.host}</hostname><port>80</port><use-ssl>false</use-ssl></server>`);
-});
-
-// Evitar error de "Servidores Cerrados"
-app.all(['/status', '/available', '/info.txt'], (req, res) => {
-    res.send('AVAILABLE=1\nMAINTENANCE=0\nIS_ONLINE=1');
-});
-
-// Respuesta por defecto para todo lo demás
-app.all('*', (req, res) => {
-    res.status(200).send('OK');
-});
-
-app.listen(port, '0.0.0.0', () => {
-    console.log(`🚀 Servidor Invisible Online en puerto ${port}`);
+httpServer.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 TCP Proxy Activo en puerto ${PORT}`);
+    console.log(`🎮 PSN Passthrough: Habilitado`);
 });
